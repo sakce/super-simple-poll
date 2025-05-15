@@ -1,0 +1,25 @@
+/* Custom styles to complement Bootstrap */
+body {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+footer {
+    margin-top: auto;
+}
+
+.card {
+    border-radius: 15px;
+}
+
+code {
+    background-color: rgba(var(--bs-primary-rgb), 0.1);
+    color: var(--bs-info);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+ul, ol {
+    margin-left: 1rem;
+}
