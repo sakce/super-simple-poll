@@ -123,13 +123,18 @@ def generate_poll_blocks(poll):
             voters = [vote.user_name for vote in poll.votes if vote.option_id == option.id]
             voters_text = f" - Votes: {', '.join(voters)}"
         
-        blocks.append({
+        # Create section block for option
+        option_block = {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
                 "text": f"*{option.text}* - {vote_count} vote(s){voters_text}"
-            },
-            "accessory": {
+            }
+        }
+        
+        # Only add vote button if poll is not closed
+        if not poll.closed:
+            option_block["accessory"] = {
                 "type": "button",
                 "text": {
                     "type": "plain_text",
@@ -138,8 +143,9 @@ def generate_poll_blocks(poll):
                 "value": f"{poll.id}|{option.id}",
                 "action_id": "vote_button",
                 "style": "primary"
-            } if not poll.closed else None
-        })
+            }
+            
+        blocks.append(option_block)
     
     # Add controls for poll creator
     if not poll.closed:
@@ -585,7 +591,69 @@ def slack_events():
             # Handle different types of interactions
             if payload.get("type") == "view_submission" and payload.get("view", {}).get("callback_id") == "poll_creation_modal":
                 logger.info("Handling poll creation modal submission")
-                handle_poll_submission(lambda: None, payload, slack_app.client, payload.get("view", {}))
+                # Manually handle poll submission
+                try:
+                    # Extract values from the modal
+                    view = payload.get("view", {})
+                    state = view.get("state", {}).get("values", {})
+                    
+                    question = state.get("question_block", {}).get("question", {}).get("value")
+                    options_text = state.get("options_block", {}).get("options", {}).get("value")
+                    
+                    # Parse deadline if provided
+                    deadline = None
+                    try:
+                        deadline_date = state.get("deadline_block", {}).get("deadline_date", {}).get("selected_date")
+                        deadline_time = state.get("deadline_time_block", {}).get("deadline_time", {}).get("selected_time")
+                        
+                        if deadline_date and deadline_time:
+                            # Parse date and time and create datetime object
+                            deadline_str = f"{deadline_date} {deadline_time}"
+                            deadline = datetime.strptime(deadline_str, "%Y-%m-%d %H:%M")
+                    except Exception as e:
+                        logger.error(f"Error parsing deadline: {e}")
+                    
+                    # Parse settings
+                    settings = state.get("settings_block", {}).get("settings", {}).get("selected_options", [])
+                    allow_multiple_votes = any(item.get("value") == "multiple_votes" for item in settings)
+                    hide_votes = any(item.get("value") == "hide_votes" for item in settings)
+                    
+                    # Split options by newline
+                    option_texts = [opt.strip() for opt in options_text.split("\n") if opt.strip()]
+                    
+                    # Create poll object
+                    poll = Poll(
+                        question=question,
+                        creator_id=payload.get("user", {}).get("id"),
+                        allow_multiple_votes=allow_multiple_votes,
+                        hide_votes=hide_votes,
+                        deadline=deadline,
+                        channel_id=view.get("private_metadata")
+                    )
+                    
+                    # Add options
+                    for text in option_texts:
+                        poll.add_option(text)
+                    
+                    # Save poll
+                    save_poll(poll)
+                    
+                    # Post the poll to the channel
+                    try:
+                        result = slack_app.client.chat_postMessage(
+                            channel=poll.channel_id,
+                            blocks=generate_poll_blocks(poll),
+                            text=f"Poll: {question}"  # Fallback text for notifications
+                        )
+                        
+                        # Store the message timestamp for later updates
+                        poll.message_ts = result["ts"]
+                        save_poll(poll)
+                        
+                    except SlackApiError as e:
+                        logger.error(f"Error posting poll: {e}")
+                except Exception as e:
+                    logger.error(f"Error processing poll submission: {e}")
                 return ""
                 
             elif payload.get("type") == "block_actions":
@@ -593,12 +661,139 @@ def slack_events():
                 action_id = payload.get("actions", [{}])[0].get("action_id") if payload.get("actions") else None
                 logger.info(f"Handling block action: {action_id}")
                 
+                # Handle the different action types directly
                 if action_id == "vote_button":
-                    handle_vote(lambda: None, payload, slack_app.client)
+                    logger.info("Processing vote")
+                    try:
+                        # Extract poll and option IDs from the button value
+                        poll_id, option_id = payload.get("actions", [{}])[0].get("value", "").split("|")
+                        user_id = payload.get("user", {}).get("id")
+                        user_name = payload.get("user", {}).get("username", "unknown")
+                        
+                        # Get the poll
+                        poll = get_poll_by_id(poll_id)
+                        if not poll:
+                            logger.error(f"Poll not found: {poll_id}")
+                            return ""
+                        
+                        # Check if poll is already closed
+                        if poll.closed:
+                            try:
+                                slack_app.client.chat_ephemeral(
+                                    channel=payload.get("channel", {}).get("id"),
+                                    user=user_id,
+                                    text="This poll is already closed."
+                                )
+                            except Exception as e:
+                                logger.error(f"Error sending ephemeral message: {e}")
+                            return ""
+                        
+                        # Check if user already voted
+                        user_votes = [vote for vote in poll.votes if vote.user_id == user_id]
+                        
+                        # If multiple votes aren't allowed and user already voted, remove the old vote
+                        if not poll.allow_multiple_votes and user_votes:
+                            # If trying to vote for the same option, remove the vote (toggle)
+                            if any(vote.option_id == option_id for vote in user_votes):
+                                for vote in user_votes[:]:
+                                    if vote.option_id == option_id:
+                                        delete_vote(poll, vote)
+                            else:
+                                # If voting for a different option, remove old votes and add new one
+                                for vote in user_votes[:]:
+                                    delete_vote(poll, vote)
+                                
+                                # Add new vote
+                                vote = Vote(user_id=user_id, user_name=user_name, option_id=option_id)
+                                save_vote(poll, vote)
+                        else:
+                            # Check if user already voted for this specific option
+                            existing_vote = next((vote for vote in user_votes if vote.option_id == option_id), None)
+                            
+                            if existing_vote:
+                                # Remove the vote (toggle behavior)
+                                delete_vote(poll, existing_vote)
+                            else:
+                                # Add new vote
+                                vote = Vote(user_id=user_id, user_name=user_name, option_id=option_id)
+                                save_vote(poll, vote)
+                        
+                        # Update the message with current vote counts
+                        try:
+                            slack_app.client.chat_update(
+                                channel=payload.get("container", {}).get("channel_id"),
+                                ts=payload.get("container", {}).get("message_ts"),
+                                blocks=generate_poll_blocks(poll)
+                            )
+                        except Exception as e:
+                            logger.error(f"Error updating poll message: {e}")
+                    except Exception as e:
+                        logger.error(f"Error processing vote: {e}")
+                        
                 elif action_id == "close_poll":
-                    handle_close_poll(lambda: None, payload, slack_app.client)
+                    logger.info("Processing close poll request")
+                    try:
+                        # Extract poll ID
+                        poll_id = payload.get("actions", [{}])[0].get("value")
+                        user_id = payload.get("user", {}).get("id")
+                        
+                        # Get the poll
+                        poll = get_poll_by_id(poll_id)
+                        if not poll:
+                            logger.error(f"Poll not found: {poll_id}")
+                            return ""
+                        
+                        # Check if user is the creator
+                        if poll.creator_id != user_id:
+                            try:
+                                slack_app.client.chat_ephemeral(
+                                    channel=payload.get("channel", {}).get("id"),
+                                    user=user_id,
+                                    text="Only the poll creator can close this poll."
+                                )
+                            except Exception as e:
+                                logger.error(f"Error sending ephemeral message: {e}")
+                            return ""
+                        
+                        # Close the poll
+                        poll.closed = True
+                        save_poll(poll)
+                        
+                        # Update the message to show the poll is closed
+                        try:
+                            slack_app.client.chat_update(
+                                channel=payload.get("container", {}).get("channel_id"),
+                                ts=payload.get("container", {}).get("message_ts"),
+                                blocks=generate_poll_blocks(poll)
+                            )
+                        except Exception as e:
+                            logger.error(f"Error updating poll message: {e}")
+                    except Exception as e:
+                        logger.error(f"Error closing poll: {e}")
+                        
                 elif action_id == "show_results":
-                    handle_show_results(lambda: None, payload, slack_app.client)
+                    logger.info("Processing show results request")
+                    try:
+                        # Extract poll ID
+                        poll_id = payload.get("actions", [{}])[0].get("value")
+                        
+                        # Get the poll
+                        poll = get_poll_by_id(poll_id)
+                        if not poll:
+                            logger.error(f"Poll not found: {poll_id}")
+                            return ""
+                        
+                        # Post results message
+                        try:
+                            slack_app.client.chat_postMessage(
+                                channel=payload.get("channel", {}).get("id"),
+                                blocks=generate_results_blocks(poll),
+                                text=f"Poll Results: {poll.question}"  # Fallback text for notifications
+                            )
+                        except Exception as e:
+                            logger.error(f"Error posting results: {e}")
+                    except Exception as e:
+                        logger.error(f"Error showing results: {e}")
                 
                 return ""
         except Exception as e:
