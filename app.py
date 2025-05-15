@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import threading
 import time
 
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, Response
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from slack_sdk.errors import SlackApiError
@@ -34,7 +34,7 @@ class CustomSlackRequestHandler(SlackRequestHandler):
         # Override to handle verification errors more gracefully
         if "ssl_check" in req.form:
             # Handle SSL check from Slack
-            return "OK"
+            return Response("OK", status=200, content_type="text/plain")
             
         return super().handle(req)
 
@@ -575,6 +575,36 @@ def slack_events():
     # Print request details for debugging
     logger.info(f"Received request headers: {request.headers}")
     
+    # Check for interactivity payload
+    if request.form and "payload" in request.form:
+        logger.info("Received interactive payload")
+        try:
+            payload = json.loads(request.form["payload"])
+            logger.info(f"Payload type: {payload.get('type')}")
+            
+            # Handle different types of interactions
+            if payload.get("type") == "view_submission" and payload.get("view", {}).get("callback_id") == "poll_creation_modal":
+                logger.info("Handling poll creation modal submission")
+                handle_poll_submission(lambda: None, payload, slack_app.client, payload.get("view", {}))
+                return ""
+                
+            elif payload.get("type") == "block_actions":
+                # Handle button clicks and other block actions
+                action_id = payload.get("actions", [{}])[0].get("action_id") if payload.get("actions") else None
+                logger.info(f"Handling block action: {action_id}")
+                
+                if action_id == "vote_button":
+                    handle_vote(lambda: None, payload, slack_app.client)
+                elif action_id == "close_poll":
+                    handle_close_poll(lambda: None, payload, slack_app.client)
+                elif action_id == "show_results":
+                    handle_show_results(lambda: None, payload, slack_app.client)
+                
+                return ""
+        except Exception as e:
+            logger.error(f"Error handling interactive payload: {e}")
+            return ""
+    
     # Log form data
     form_data = request.form.to_dict() if request.form else {}
     # For security, don't log the entire token
@@ -721,6 +751,22 @@ def slack_events():
 @app.route("/", methods=["GET"])
 def home():
     return render_template("index.html")
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    """
+    Simple health check endpoint that also displays the current Slack app configuration
+    """
+    return jsonify({
+        "status": "ok",
+        "slack_app": {
+            "token_set": bool(os.environ.get("SLACK_BOT_TOKEN")),
+            "signing_secret_set": bool(os.environ.get("SLACK_SIGNING_SECRET")),
+            "channel_id_set": bool(os.environ.get("SLACK_CHANNEL_ID")),
+            "webhook_url": request.host_url + "slack/events"
+        },
+        "polls_count": len(Poll.polls)
+    })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
