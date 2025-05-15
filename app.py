@@ -640,17 +640,19 @@ def slack_events():
                     
                     # Post the poll to the channel
                     try:
-                        result = slack_app.client.chat_postMessage(
-                            channel=poll.channel_id,
-                            blocks=generate_poll_blocks(poll),
-                            text=f"Poll: {question}"  # Fallback text for notifications
-                        )
-                        
-                        # Store the message timestamp for later updates
-                        poll.message_ts = result["ts"]
-                        save_poll(poll)
-                        
-                    except SlackApiError as e:
+                        if poll.channel_id:
+                            result = slack_app.client.chat_postMessage(
+                                channel=poll.channel_id,
+                                blocks=generate_poll_blocks(poll),
+                                text=f"Poll: {question}"  # Fallback text for notifications
+                            )
+                            
+                            # Store the message timestamp for later updates
+                            poll.message_ts = result["ts"]
+                            save_poll(poll)
+                        else:
+                            logger.error("Cannot post poll: channel ID is missing")
+                    except Exception as e:
                         logger.error(f"Error posting poll: {e}")
                 except Exception as e:
                     logger.error(f"Error processing poll submission: {e}")
@@ -679,11 +681,13 @@ def slack_events():
                         # Check if poll is already closed
                         if poll.closed:
                             try:
-                                slack_app.client.chat_ephemeral(
-                                    channel=payload.get("channel", {}).get("id"),
-                                    user=user_id,
-                                    text="This poll is already closed."
-                                )
+                                channel_id = payload.get("channel", {}).get("id")
+                                if channel_id and user_id:
+                                    slack_app.client.chat_postEphemeral(
+                                        channel=channel_id,
+                                        user=user_id,
+                                        text="This poll is already closed."
+                                    )
                             except Exception as e:
                                 logger.error(f"Error sending ephemeral message: {e}")
                             return ""
@@ -746,11 +750,13 @@ def slack_events():
                         # Check if user is the creator
                         if poll.creator_id != user_id:
                             try:
-                                slack_app.client.chat_ephemeral(
-                                    channel=payload.get("channel", {}).get("id"),
-                                    user=user_id,
-                                    text="Only the poll creator can close this poll."
-                                )
+                                channel_id = payload.get("channel", {}).get("id")
+                                if channel_id and user_id:
+                                    slack_app.client.chat_postEphemeral(
+                                        channel=channel_id,
+                                        user=user_id,
+                                        text="Only the poll creator can close this poll."
+                                    )
                             except Exception as e:
                                 logger.error(f"Error sending ephemeral message: {e}")
                             return ""
@@ -785,11 +791,15 @@ def slack_events():
                         
                         # Post results message
                         try:
-                            slack_app.client.chat_postMessage(
-                                channel=payload.get("channel", {}).get("id"),
-                                blocks=generate_results_blocks(poll),
-                                text=f"Poll Results: {poll.question}"  # Fallback text for notifications
-                            )
+                            channel_id = payload.get("channel", {}).get("id")
+                            if channel_id:
+                                slack_app.client.chat_postMessage(
+                                    channel=channel_id,
+                                    blocks=generate_results_blocks(poll),
+                                    text=f"Poll Results: {poll.question}"  # Fallback text for notifications
+                                )
+                            else:
+                                logger.error("Cannot post results: channel ID is missing")
                         except Exception as e:
                             logger.error(f"Error posting results: {e}")
                     except Exception as e:

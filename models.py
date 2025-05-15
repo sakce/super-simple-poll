@@ -27,7 +27,8 @@ class Poll:
         self.hide_votes = hide_votes
         self.deadline = deadline
         self.closed = False
-        self.channel_id = channel_id
+        # Ensure channel_id is always a string or None
+        self.channel_id = str(channel_id) if channel_id is not None else None
         self.message_ts = None
         self.options = []
         self.votes = []
