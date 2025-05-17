@@ -663,6 +663,13 @@ def slack_events():
                     hide_votes = any(
                         item.get("value") == "hide_votes" for item in settings
                     )
+                    hide_vote_count = any(
+                        item.get("value") == "hide_vote_count" for item in settings
+                    )
+                    
+                    # Make sure vote counts can't be hidden if individual votes are visible
+                    if not hide_votes and hide_vote_count:
+                        hide_vote_count = False
 
                     # Split options by newline
                     option_texts = [
@@ -675,6 +682,7 @@ def slack_events():
                         creator_id=payload.get("user", {}).get("id"),
                         allow_multiple_votes=allow_multiple_votes,
                         hide_votes=hide_votes,
+                        hide_vote_count=hide_vote_count,
                         deadline=deadline,
                         channel_id=view.get("private_metadata"),
                     )
@@ -978,23 +986,29 @@ def slack_events():
                             "optional": True,
                             "element": {
                                 "type": "checkboxes",
-                                "action_id": "settings",
-                                "options": [
-                                    {
-                                        "text": {
-                                            "type": "plain_text",
-                                            "text": "Allow multiple votes per user",
-                                        },
-                                        "value": "multiple_votes",
+                                "action_id": "settings",                            "options": [
+                                {
+                                    "text": {
+                                        "type": "plain_text",
+                                        "text": "Allow multiple votes per user",
                                     },
-                                    {
-                                        "text": {
-                                            "type": "plain_text",
-                                            "text": "Hide votes until poll is closed",
-                                        },
-                                        "value": "hide_votes",
+                                    "value": "multiple_votes",
+                                },
+                                {
+                                    "text": {
+                                        "type": "plain_text",
+                                        "text": "Hide individual votes until poll is closed",
                                     },
-                                ],
+                                    "value": "hide_votes",
+                                },
+                                {
+                                    "text": {
+                                        "type": "plain_text",
+                                        "text": "Hide vote count until poll is closed",
+                                    },
+                                    "value": "hide_vote_count",
+                                },
+                            ],
                             },
                             "label": {"type": "plain_text", "text": "Poll Settings"},
                         },
