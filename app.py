@@ -120,13 +120,13 @@ def generate_poll_blocks(poll):
         # Show voters if not hidden
         voters_text = ""
         vote_count_text = f" - {vote_count} vote(s)"
-        
+
         if not poll.hide_votes and vote_count > 0:
             voters = [
                 vote.user_name for vote in poll.votes if vote.option_id == option.id
             ]
             voters_text = f" - Votes: {', '.join(voters)}"
-        
+
         # Hide vote count if that option is enabled
         if poll.hide_vote_count:
             vote_count_text = ""
@@ -218,16 +218,12 @@ def generate_results_blocks(poll):
     for option, count in sorted_options:
         voters_text = ""
         vote_count_text = f": {count} vote(s)"
-        
+
         if not poll.hide_votes and count > 0:
             voters = [
                 vote.user_name for vote in poll.votes if vote.option_id == option.id
             ]
             voters_text = f"\nVoters: {', '.join(voters)}"
-            
-        # Hide vote count if that option is enabled
-        if poll.hide_vote_count:
-            vote_count_text = ""
 
         blocks.append(
             {
@@ -393,9 +389,11 @@ def handle_poll_submission(ack, body, client, view):
         any(item["value"] == "hide_votes" for item in settings) if settings else False
     )
     hide_vote_count = (
-        any(item["value"] == "hide_vote_count" for item in settings) if settings else False
+        any(item["value"] == "hide_vote_count" for item in settings)
+        if settings
+        else False
     )
-    
+
     # Make sure vote counts can't be hidden if individual votes are visible
     if hide_votes is False and hide_vote_count is True:
         hide_vote_count = False
@@ -666,7 +664,7 @@ def slack_events():
                     hide_vote_count = any(
                         item.get("value") == "hide_vote_count" for item in settings
                     )
-                    
+
                     # Make sure vote counts can't be hidden if individual votes are visible
                     if not hide_votes and hide_vote_count:
                         hide_vote_count = False
@@ -986,29 +984,30 @@ def slack_events():
                             "optional": True,
                             "element": {
                                 "type": "checkboxes",
-                                "action_id": "settings",                            "options": [
-                                {
-                                    "text": {
-                                        "type": "plain_text",
-                                        "text": "Allow multiple votes per user",
+                                "action_id": "settings",
+                                "options": [
+                                    {
+                                        "text": {
+                                            "type": "plain_text",
+                                            "text": "Allow multiple votes per user",
+                                        },
+                                        "value": "multiple_votes",
                                     },
-                                    "value": "multiple_votes",
-                                },
-                                {
-                                    "text": {
-                                        "type": "plain_text",
-                                        "text": "Hide individual votes until poll is closed",
+                                    {
+                                        "text": {
+                                            "type": "plain_text",
+                                            "text": "Hide individual votes until poll is closed",
+                                        },
+                                        "value": "hide_votes",
                                     },
-                                    "value": "hide_votes",
-                                },
-                                {
-                                    "text": {
-                                        "type": "plain_text",
-                                        "text": "Hide vote count until poll is closed",
+                                    {
+                                        "text": {
+                                            "type": "plain_text",
+                                            "text": "Hide vote count until poll is closed",
+                                        },
+                                        "value": "hide_vote_count",
                                     },
-                                    "value": "hide_vote_count",
-                                },
-                            ],
+                                ],
                             },
                             "label": {"type": "plain_text", "text": "Poll Settings"},
                         },
