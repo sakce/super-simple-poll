@@ -27,6 +27,7 @@ class Poll:
         creator_id,
         allow_multiple_votes=False,
         hide_votes=False,
+        hide_vote_count=False,
         deadline=None,
         channel_id=None,
     ):
@@ -36,6 +37,10 @@ class Poll:
         self.created_at = datetime.now()
         self.allow_multiple_votes = allow_multiple_votes
         self.hide_votes = hide_votes
+        self.hide_vote_count = hide_vote_count
+        # If individual votes are visible, vote count can't be hidden
+        if self.hide_votes is False and self.hide_vote_count is True:
+            self.hide_vote_count = False
         self.deadline = deadline
         self.closed = False
         # Ensure channel_id is always a string or None

@@ -119,18 +119,24 @@ def generate_poll_blocks(poll):
 
         # Show voters if not hidden
         voters_text = ""
+        vote_count_text = f" - {vote_count} vote(s)"
+        
         if not poll.hide_votes and vote_count > 0:
             voters = [
                 vote.user_name for vote in poll.votes if vote.option_id == option.id
             ]
             voters_text = f" - Votes: {', '.join(voters)}"
+        
+        # Hide vote count if that option is enabled
+        if poll.hide_vote_count:
+            vote_count_text = ""
 
         # Create section block for option
         option_block = {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*{option.text}* - {vote_count} vote(s){voters_text}",
+                "text": f"*{option.text}*{vote_count_text}{voters_text}",
             },
         }
 
@@ -211,18 +217,24 @@ def generate_results_blocks(poll):
     # Add each option with vote count
     for option, count in sorted_options:
         voters_text = ""
+        vote_count_text = f": {count} vote(s)"
+        
         if not poll.hide_votes and count > 0:
             voters = [
                 vote.user_name for vote in poll.votes if vote.option_id == option.id
             ]
             voters_text = f"\nVoters: {', '.join(voters)}"
+            
+        # Hide vote count if that option is enabled
+        if poll.hide_vote_count:
+            vote_count_text = ""
 
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*{option.text}*: {count} vote(s){voters_text}",
+                    "text": f"*{option.text}*{vote_count_text}{voters_text}",
                 },
             }
         )
@@ -236,8 +248,7 @@ def create_poll(ack, body, client):
     # Acknowledge the command request
     ack()
 
-    # Get user information
-    user_id = body["user_id"]
+    # Get channel_id
     channel_id = body["channel_id"]
 
     # Open a modal for poll creation
@@ -316,9 +327,16 @@ def create_poll(ack, body, client):
                                 {
                                     "text": {
                                         "type": "plain_text",
-                                        "text": "Hide votes until poll is closed",
+                                        "text": "Hide individual votes until poll is closed",
                                     },
                                     "value": "hide_votes",
+                                },
+                                {
+                                    "text": {
+                                        "type": "plain_text",
+                                        "text": "Hide vote count until poll is closed",
+                                    },
+                                    "value": "hide_vote_count",
                                 },
                             ],
                         },
@@ -374,6 +392,13 @@ def handle_poll_submission(ack, body, client, view):
     hide_votes = (
         any(item["value"] == "hide_votes" for item in settings) if settings else False
     )
+    hide_vote_count = (
+        any(item["value"] == "hide_vote_count" for item in settings) if settings else False
+    )
+    
+    # Make sure vote counts can't be hidden if individual votes are visible
+    if hide_votes is False and hide_vote_count is True:
+        hide_vote_count = False
 
     # Split options by newline
     option_texts = [opt.strip() for opt in options_text.split("\n") if opt.strip()]
@@ -384,6 +409,7 @@ def handle_poll_submission(ack, body, client, view):
         creator_id=body["user"]["id"],
         allow_multiple_votes=allow_multiple_votes,
         hide_votes=hide_votes,
+        hide_vote_count=hide_vote_count,
         deadline=deadline,
         channel_id=view["private_metadata"],
     )
