@@ -1,91 +1,184 @@
 import uuid
 from datetime import datetime
 
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 
-class PollOption:
-    def __init__(self, text):
-        self.id = str(uuid.uuid4())
-        self.text = text
-
-
-class Vote:
-    def __init__(self, user_id, user_name, option_id):
-        self.id = str(uuid.uuid4())
-        self.user_id = user_id
-        self.user_name = user_name
-        self.option_id = option_id
-        self.timestamp = datetime.now()
+# Create SQLAlchemy engine for DuckDB with MotherDuck
+connection_string = "duckdb:///md:dev_poll"
+engine = create_engine(connection_string, echo=True)
+SessionFactory = sessionmaker(bind=engine)
+Session = scoped_session(SessionFactory)
+Base = declarative_base()
 
 
-class Poll:
-    # In-memory storage for all polls
-    polls = {}
+# Model definitions
+class Poll(Base):
+    __tablename__ = "polls"
 
-    def __init__(
-        self,
-        question,
-        creator_id,
-        allow_multiple_votes=False,
-        hide_votes=False,
-        hide_vote_count=False,
-        deadline=None,
-        channel_id=None,
-    ):
-        self.id = str(uuid.uuid4())
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    question = Column(String, nullable=False)
+    creator_id = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+    allow_multiple_votes = Column(Boolean, default=False)
+    hide_votes = Column(Boolean, default=False)
+    hide_vote_count = Column(Boolean, default=False)
+    deadline = Column(DateTime, nullable=True)
+    closed = Column(Boolean, default=False)
+    channel_id = Column(String, nullable=True)
+    message_ts = Column(String, nullable=True)
+
+    # Relationships
+    options = relationship(
+        "PollOption", back_populates="poll", cascade="all, delete-orphan"
+    )
+
+    def __init__(self, question, creator_id, **kwargs):
+        self.id = kwargs.get("id", str(uuid.uuid4()))
         self.question = question
         self.creator_id = creator_id
-        self.created_at = datetime.now()
-        self.allow_multiple_votes = allow_multiple_votes
-        self.hide_votes = hide_votes
-        self.hide_vote_count = hide_vote_count
+        self.created_at = kwargs.get("created_at", datetime.now())
+        self.allow_multiple_votes = kwargs.get("allow_multiple_votes", False)
+        self.hide_votes = kwargs.get("hide_votes", False)
+        self.hide_vote_count = kwargs.get("hide_vote_count", False)
         # If individual votes are visible, vote count can't be hidden
         if self.hide_votes is False and self.hide_vote_count is True:
             self.hide_vote_count = False
-        self.deadline = deadline
-        self.closed = False
-        # Ensure channel_id is always a string or None
-        self.channel_id = str(channel_id) if channel_id is not None else None
-        self.message_ts = None
-        self.options = []
-        self.votes = []
+        self.deadline = kwargs.get("deadline")
+        self.closed = kwargs.get("closed", False)
+        self.channel_id = (
+            str(kwargs.get("channel_id")) if kwargs.get("channel_id") else None
+        )
+        self.message_ts = kwargs.get("message_ts")
 
     def add_option(self, text):
-        option = PollOption(text)
-        self.options.append(option)
+        """Add a new option to this poll"""
+        option = PollOption(text=text, poll=self)
+        session = Session()
+        session.add(option)
+        session.commit()
         return option
 
-    def add_vote(self, vote):
-        self.votes.append(vote)
-
-    def remove_vote(self, vote_id):
-        self.votes = [v for v in self.votes if v.id != vote_id]
-
     def get_votes_for_option(self, option_id):
-        return [vote for vote in self.votes if vote.option_id == option_id]
+        """Get all votes for a specific option"""
+        session = Session()
+        votes = (
+            session.query(Vote)
+            .join(PollOption)
+            .filter(PollOption.poll_id == self.id, Vote.option_id == option_id)
+            .all()
+        )
+        return votes
+
+    @classmethod
+    def get_expired_polls(cls):
+        """Get all polls that have passed their deadline but are not closed yet"""
+        session = Session()
+        now = datetime.now()
+        return session.query(cls).filter(cls.deadline < now, cls.closed == False).all()
+
+
+class PollOption(Base):
+    __tablename__ = "poll_options"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    poll_id = Column(String, ForeignKey("polls.id"))
+    text = Column(String, nullable=False)
+
+    # Relationships
+    poll = relationship("Poll", back_populates="options")
+    votes = relationship("Vote", back_populates="option", cascade="all, delete-orphan")
+
+    def __init__(self, text, poll=None, **kwargs):
+        self.id = kwargs.get("id", str(uuid.uuid4()))
+        self.text = text
+        if poll:
+            self.poll = poll
+            self.poll_id = poll.id
+        else:
+            self.poll_id = kwargs.get("poll_id")
+
+
+class Vote(Base):
+    __tablename__ = "votes"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, nullable=False)
+    user_name = Column(String, nullable=False)
+    option_id = Column(String, ForeignKey("poll_options.id"))
+    timestamp = Column(DateTime, default=datetime.now)
+
+    # Relationships
+    option = relationship("PollOption", back_populates="votes")
+
+    def __init__(self, user_id, user_name, option_id, **kwargs):
+        self.id = kwargs.get("id", str(uuid.uuid4()))
+        self.user_id = user_id
+        self.user_name = user_name
+        self.option_id = option_id
+        self.timestamp = kwargs.get("timestamp", datetime.now())
+
+
+# Create tables
+def init_db():
+    Base.metadata.create_all(engine)
+
+
+# Initialize database on module import
+init_db()
 
 
 # Helper functions for poll management
 def save_poll(poll):
-    Poll.polls[poll.id] = poll
+    """Save a poll to the database"""
+    session = Session()
+    session.add(poll)
+    session.commit()
     return poll
 
 
 def get_poll_by_id(poll_id):
-    return Poll.polls.get(poll_id)
+    """Retrieve a poll by its ID"""
+    session = Session()
+    return session.query(Poll).filter(Poll.id == poll_id).first()
+
+
+def get_expired_polls():
+    """Get all polls that have passed their deadline but are not closed yet"""
+    return Poll.get_expired_polls()
 
 
 def delete_poll(poll_id):
-    if poll_id in Poll.polls:
-        del Poll.polls[poll_id]
+    """Delete a poll and all associated options and votes"""
+    session = Session()
+    poll = session.query(Poll).filter(Poll.id == poll_id).first()
+    if poll:
+        session.delete(poll)
+        session.commit()
         return True
     return False
 
 
-def save_vote(poll, vote):
-    poll.add_vote(vote)
+def save_vote(poll, vote_data):
+    """Add a vote to a poll"""
+    session = Session()
+    vote = Vote(
+        user_id=vote_data["user_id"],
+        user_name=vote_data["user_name"],
+        option_id=vote_data["option_id"],
+    )
+    session.add(vote)
+    session.commit()
     return vote
 
 
-def delete_vote(poll, vote):
-    poll.remove_vote(vote.id)
-    return True
+def delete_vote(vote_id):
+    """Remove a vote"""
+    session = Session()
+    vote = session.query(Vote).filter(Vote.id == vote_id).first()
+    if vote:
+        session.delete(vote)
+        session.commit()
+        return True
+    return False

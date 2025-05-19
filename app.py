@@ -11,7 +11,16 @@ from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from slack_sdk.errors import SlackApiError
 
-from models import Poll, Vote, delete_vote, get_poll_by_id, save_poll, save_vote
+from models import (
+    Poll,
+    Session,
+    Vote,
+    delete_vote,
+    get_expired_polls,
+    get_poll_by_id,
+    save_poll,
+    save_vote,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -49,28 +58,28 @@ handler = CustomSlackRequestHandler(slack_app)
 def check_expired_polls():
     while True:
         try:
-            current_time = datetime.now()
-            all_polls = [
-                poll
-                for poll_id, poll in Poll.polls.items()
-                if poll.deadline and not poll.closed
-            ]
+            # Use the get_expired_polls function instead of accessing Poll.polls
+            expired_polls = get_expired_polls()
 
-            for poll in all_polls:
-                if poll.deadline and current_time > poll.deadline and not poll.closed:
-                    logger.info(f"Automatically closing poll {poll.id} due to deadline")
-                    poll.closed = True
-                    save_poll(poll)
+            for poll in expired_polls:
+                logger.info(f"Automatically closing poll {poll.id} due to deadline")
+                poll.closed = True
+                save_poll(poll)
 
-                    # Update the message to reflect that the poll is closed
-                    try:
+                # Update the message to reflect that the poll is closed
+                try:
+                    if poll.channel_id and poll.message_ts:
                         slack_app.client.chat_update(
                             channel=poll.channel_id,
                             ts=poll.message_ts,
                             blocks=generate_poll_blocks(poll),
                         )
-                    except SlackApiError as e:
-                        logger.error(f"Error updating poll message: {e}")
+                    else:
+                        logger.error(
+                            f"Missing channel_id or message_ts for poll {poll.id}"
+                        )
+                except SlackApiError as e:
+                    logger.error(f"Error updating poll message: {e}")
         except Exception as e:
             logger.error(f"Error in expired polls check: {e}")
 
@@ -1041,6 +1050,10 @@ def health_check():
     """
     Simple health check endpoint that also displays the current Slack app configuration
     """
+    # Count polls in the database
+    session = Session()
+    polls_count = session.query(Poll).count()
+
     return jsonify(
         {
             "status": "ok",
@@ -1050,7 +1063,7 @@ def health_check():
                 "channel_id_set": bool(os.environ.get("SLACK_CHANNEL_ID")),
                 "webhook_url": request.host_url + "slack/events",
             },
-            "polls_count": len(Poll.polls),
+            "polls_count": polls_count,
         }
     )
 
