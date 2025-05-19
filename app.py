@@ -486,6 +486,11 @@ def handle_vote(ack, body, client):
             for vote in user_votes[:]:
                 if vote.option_id == option_id:
                     delete_vote(poll, vote)
+                    client.chat_ephemeral(
+                        channel=body["channel"]["id"],
+                        user=user_id,
+                        text="Vote removed.",
+                    )
         else:
             # If voting for a different option, remove old votes and add new one
             for vote in user_votes[:]:
@@ -494,6 +499,11 @@ def handle_vote(ack, body, client):
             # Add new vote
             vote = Vote(user_id=user_id, user_name=user_name, option_id=option_id)
             save_vote(poll, vote)
+            client.chat_ephemeral(
+                channel=body["channel"]["id"],
+                user=user_id,
+                text="Vote submitted.",
+            )
     else:
         # Check if user already voted for this specific option
         existing_vote = next(
@@ -503,6 +513,11 @@ def handle_vote(ack, body, client):
         if existing_vote:
             # Remove the vote (toggle behavior)
             delete_vote(poll, existing_vote)
+            client.chat_ephemeral(
+                channel=body["channel"]["id"],
+                user=user_id,
+                text="Vote removed.",
+            )
         else:
             # Add new vote
             vote = Vote(user_id=user_id, user_name=user_name, option_id=option_id)
@@ -510,6 +525,11 @@ def handle_vote(ack, body, client):
             posthog.capture(
                 "poll_vote_submitted",
                 properties={"poll_id": poll.id, "user_id": user_id},
+            )
+            client.chat_ephemeral(
+                channel=body["channel"]["id"],
+                user=user_id,
+                text="Vote submitted.",
             )
 
     # Update the message with current vote counts
