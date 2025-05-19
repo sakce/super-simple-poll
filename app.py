@@ -75,7 +75,9 @@ def check_expired_polls():
                             blocks=generate_poll_blocks(poll),
                         )
                     else:
-                        logger.error(f"Missing channel_id or message_ts for poll {poll.id}")
+                        logger.error(
+                            f"Missing channel_id or message_ts for poll {poll.id}"
+                        )
                 except SlackApiError as e:
                     logger.error(f"Error updating poll message: {e}")
         except Exception as e:
@@ -102,35 +104,50 @@ def generate_poll_blocks(poll):
 
     # Poll metadata section - shows the settings and deadline
     metadata_elements = []
-    
+
+    # Always show total participants count
+    unique_voters = set(vote.user_id for vote in poll.votes)
+    total_participants = len(unique_voters)
+    metadata_elements.append(
+        {"type": "mrkdwn", "text": f"👥 *Total participants:* {total_participants}"}
+    )
+
     # Add voting settings metadata
     if poll.allow_multiple_votes:
-        metadata_elements.append({"type": "mrkdwn", "text": "✅ *Multiple votes allowed*"})
+        metadata_elements.append(
+            {"type": "mrkdwn", "text": "✅ *Multiple votes allowed*"}
+        )
     else:
         metadata_elements.append({"type": "mrkdwn", "text": "🔒 *Single vote only*"})
-    
+
     if poll.hide_votes:
-        metadata_elements.append({"type": "mrkdwn", "text": "👁️‍🗨️ *Individual votes hidden until poll closes*"})
-        
+        metadata_elements.append(
+            {"type": "mrkdwn", "text": "👁️‍🗨️ *Individual votes hidden until poll closes*"}
+        )
+
     if poll.hide_vote_count:
-        metadata_elements.append({"type": "mrkdwn", "text": "🔢 *Vote count hidden until poll closes*"})
-    
+        metadata_elements.append(
+            {
+                "type": "mrkdwn",
+                "text": "🔢 *Option vote counts hidden until poll closes*",
+            }
+        )
+
     # Add deadline info if it exists
     if poll.deadline:
         deadline_str = poll.deadline.strftime("%Y-%m-%d %H:%M:%S")
-        metadata_elements.append({"type": "mrkdwn", "text": f"⏰ *Deadline:* {deadline_str}"})
-    
+        metadata_elements.append(
+            {"type": "mrkdwn", "text": f"⏰ *Deadline:* {deadline_str}"}
+        )
+
     # Add "poll closed" notice if applicable
     if poll.closed:
         metadata_elements.append({"type": "mrkdwn", "text": "🚫 *This poll is closed*"})
-    
+
     # Only add the metadata section if we have elements
     if metadata_elements:
-        blocks.append({
-            "type": "context",
-            "elements": metadata_elements
-        })
-    
+        blocks.append({"type": "context", "elements": metadata_elements})
+
     # Add divider after metadata
     blocks.append({"type": "divider"})
 
@@ -141,18 +158,18 @@ def generate_poll_blocks(poll):
 
         # Show voters if not hidden
         voters_text = ""
-        vote_count_text = f" - {vote_count} vote(s)"
 
-        # Only show votes if not hidden or if poll is closed and votes were hidden
-        if (not poll.hide_votes or (poll.closed and poll.hide_votes)) and vote_count > 0:
+        # Only show option vote count if not hidden or if poll is closed
+        vote_count_text = ""
+        if not poll.hide_vote_count or poll.closed:
+            vote_count_text = f" - {vote_count} vote(s)"
+
+        # Only show individual voters if not hidden or if poll is closed and votes were hidden
+        if (not poll.hide_votes or poll.closed) and vote_count > 0:
             voters = [
                 vote.user_name for vote in poll.votes if vote.option_id == option.id
             ]
             voters_text = f" - Votes: {', '.join(voters)}"
-
-        # Hide vote count if that option is enabled and poll is not closed
-        if poll.hide_vote_count and not poll.closed:
-            vote_count_text = ""
 
         # Create section block for option
         option_block = {
@@ -221,6 +238,24 @@ def generate_results_blocks(poll):
         },
         {"type": "divider"},
     ]
+
+    # Add total participants count
+    unique_voters = set(vote.user_id for vote in poll.votes)
+    total_participants = len(unique_voters)
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"👥 *Total participants:* {total_participants}",
+                }
+            ],
+        }
+    )
+
+    # Add divider after metadata
+    blocks.append({"type": "divider"})
 
     # Group votes by option
     vote_counts = {}
@@ -353,7 +388,7 @@ def create_poll(ack, body, client):
                                 {
                                     "text": {
                                         "type": "plain_text",
-                                        "text": "Hide vote count until poll is closed",
+                                        "text": "Hide option vote counts until poll is closed",
                                     },
                                     "value": "hide_vote_count",
                                 },
@@ -416,10 +451,6 @@ def handle_poll_submission(ack, body, client, view):
         if settings
         else False
     )
-
-    # Make sure vote counts can't be hidden if individual votes are visible
-    if hide_votes is False and hide_vote_count is True:
-        hide_vote_count = False
 
     # Split options by newline
     option_texts = [opt.strip() for opt in options_text.split("\n") if opt.strip()]
@@ -707,10 +738,6 @@ def slack_events():
                     hide_vote_count = any(
                         item.get("value") == "hide_vote_count" for item in settings
                     )
-
-                    # Make sure vote counts can't be hidden if individual votes are visible
-                    if not hide_votes and hide_vote_count:
-                        hide_vote_count = False
 
                     # Split options by newline
                     option_texts = [
@@ -1046,7 +1073,7 @@ def slack_events():
                                     {
                                         "text": {
                                             "type": "plain_text",
-                                            "text": "Hide vote count until poll is closed",
+                                            "text": "Hide option vote counts until poll is closed",
                                         },
                                         "value": "hide_vote_count",
                                     },

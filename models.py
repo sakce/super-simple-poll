@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, create_engine
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, create_engine, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 
@@ -23,7 +23,7 @@ class Poll(Base):
     created_at = Column(DateTime, default=datetime.now)
     allow_multiple_votes = Column(Boolean, default=False)
     hide_votes = Column(Boolean, default=False)
-    hide_vote_count = Column(Boolean, default=False)
+    hide_vote_count = Column(Boolean, default=False)  # Now controls only option vote counts
     deadline = Column(DateTime, nullable=True)
     closed = Column(Boolean, default=False)
     channel_id = Column(String, nullable=True)
@@ -42,9 +42,9 @@ class Poll(Base):
         self.allow_multiple_votes = kwargs.get("allow_multiple_votes", False)
         self.hide_votes = kwargs.get("hide_votes", False)
         self.hide_vote_count = kwargs.get("hide_vote_count", False)
-        # If individual votes are visible, vote count can't be hidden
-        if self.hide_votes is False and self.hide_vote_count is True:
-            self.hide_vote_count = False
+        # Note: we no longer need this constraint since hide_vote_count has a different meaning now
+        # if self.hide_votes is False and self.hide_vote_count is True:
+        #     self.hide_vote_count = False
         self.deadline = kwargs.get("deadline")
         self.closed = kwargs.get("closed", False)
         self.channel_id = (
@@ -70,6 +70,14 @@ class Poll(Base):
             .all()
         )
         return votes
+        
+    def get_total_participants(self):
+        """Get the count of unique users who voted in this poll"""
+        session = Session()
+        return session.query(func.count(func.distinct(Vote.user_id)))\
+            .join(PollOption)\
+            .filter(PollOption.poll_id == self.id)\
+            .scalar() or 0
 
     @classmethod
     def get_expired_polls(cls):
